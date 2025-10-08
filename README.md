@@ -1,21 +1,30 @@
-# README — Powershell_code_encrtpyer_and_executer (encryptor → executable generator)
+# Powershell_code_encrtpyer_and_executer
 
-Short: a single-file Python tool that encrypts a PowerShell `.ps1` payload with RSA-OAEP-SHA256 + AES-GCM-256 and emits a self-contained Python executor. Running the generated executor fetches the private PEM, verifies host requirements, decrypts the payload, runs it in PowerShell, and securely removes temp artifacts.
+Single-file Python generator that encrypts a PowerShell `.ps1` payload with RSA-OAEP-SHA256 + AES-GCM-256 and emits a self-contained Python executor. Running the generated executor fetches the private PEM, verifies system requirements, decrypts the payload, executes it with PowerShell, and securely removes temp artifacts.
+
+---
+
+## Quick facts
+
+* Generator filename: `Powershell_code_encrtpyer_and_executer.py`
+* Default generated executor: `payload_exec.py`
+* Crypto: RSA-OAEP-SHA256 (key encapsulation) + AES-GCM-256 (content encryption)
+* Dependencies: Python 3.8+; `requests`, `pycryptodome`
+* Intended use: controlled, authorized environments only
 
 ---
 
 ## Table of contents
 
 * Requirements
-* Files
-* Installation
-* Quick example (end-to-end)
-* Detailed usage (generator)
-* Detailed usage (generated executor)
-* Design & crypto summary
+* Install
+* Files in repository
+* Generate executor (end-to-end)
+* Run generated executor
+* How it works (brief)
 * Security notes & operational guidance
 * Troubleshooting
-* Tests
+* Testing checklist
 * License
 
 ---
@@ -24,29 +33,16 @@ Short: a single-file Python tool that encrypts a PowerShell `.ps1` payload with 
 
 * Python 3.8+ (3.10+ recommended)
 * `pip`
-* Python packages:
+* PowerShell present on target Windows host (`pwsh` or `powershell.exe`) and on `PATH` for execution.
+* Public/private RSA key pair in PEM format:
 
-```
-pip install requests pycryptodome
-```
-
-* PowerShell available in `PATH` on target Windows host (`pwsh` or `powershell.exe`).
-* RSA key pair in PEM format (public PEM for encryptor, private PEM accessible via HTTPS raw URL for the executor).
+  * Public PEM: `-----BEGIN PUBLIC KEY-----` (X.509 / SubjectPublicKeyInfo)
+  * Private PEM: `-----BEGIN PRIVATE KEY-----` (PKCS#8)
+* Private PEM must be reachable via a raw HTTPS URL by the generated executor.
 
 ---
 
-## Files
-
-* `pyscripty.py` — generator. Prompts for inputs and writes the generated executor Python file (default `payload_exec.py`).
-* `payload_exec.py` (generated) — self-contained runtime: fetch private PEM, check system, decrypt, run `.ps1`, cleanup.
-* Your plaintext PowerShell payload `.ps1` — user-supplied.
-
----
-
-## Installation
-
-1. Clone repository or copy files.
-2. Install dependencies:
+## Install
 
 ```bash
 pip install requests pycryptodome
@@ -54,135 +50,134 @@ pip install requests pycryptodome
 
 ---
 
-## Quick example (end-to-end)
+## Files
 
-1. Generate RSA keys (example with OpenSSL):
+* `Powershell_code_encrtpyer_and_executer.py` — generator. Prompts for inputs and writes the generated executor Python file (default `payload_exec.py`).
+* `payload_exec.py` — example name for the generated executor. It is created by the generator and contains the encrypted package plus embedded private-key URL.
+* Your plaintext PowerShell payload `.ps1` — user-supplied.
+
+---
+
+## Generate executor (end-to-end)
+
+1. Prepare RSA key pair (example using OpenSSL):
 
 ```bash
 openssl genpkey -algorithm RSA -out private.pem -pkeyopt rsa_keygen_bits:2048
 openssl rsa -in private.pem -pubout -out public.pem
 ```
 
-2. Host `public.pem` and `private.pem` using a raw HTTPS URL (S3, GitHub raw, internal server). Example local test:
+2. Host the PEMs so they are reachable via raw HTTPS URLs. Example local test:
 
 ```bash
+# in folder with public.pem private.pem
 python -m http.server 8000
-# public: http://localhost:8000/public.pem
-# private: http://localhost:8000/private.pem
+# public URL: http://localhost:8000/public.pem
+# private URL: http://localhost:8000/private.pem
 ```
 
 3. Run generator:
 
 ```bash
-python pyscripty.py
-# follow prompts:
-#  - Public PEM URL (raw)
-#  - Private PEM URL (raw) — embedded in generated file
-#  - Path to .ps1 to encrypt (local)
-#  - Output filename (default payload_exec.py)
+python Powershell_code_encrtpyer_and_executer.py
 ```
 
-4. Run generated executor on the target Windows host:
+Follow the prompts:
+
+* `Public PEM URL (raw HTTPS)` → e.g. `https://raw.githubusercontent.com/user/repo/main/public.pem`
+* `Private PEM URL (will be embedded in generated file)` → e.g. `https://raw.githubusercontent.com/user/repo/main/private.pem`
+* `Path to PowerShell .ps1 to encrypt` → path to local `.ps1` payload
+* `Output filename (default payload_exec.py)` → name for generated executor
+
+4. Generator writes the output file (e.g. `payload_exec.py`).
+
+---
+
+## Run generated executor
+
+On the target machine (must have Python and PowerShell):
 
 ```bash
-python payload_exec.py
-```
-
----
-
-## Detailed usage — generator (`pyscripty.py`)
-
-1. Start:
-
-```
-python pyscripty.py
-```
-
-2. Enter:
-
-* **Public PEM URL**: raw HTTPS link to `public.pem`.
-* **Private PEM URL**: raw HTTPS link to `private.pem` (this URL is embedded in the generated executor).
-* **Path to .ps1**: local PowerShell script to encrypt.
-* **Output filename**: filename for the generated Python executor (default `payload_exec.py`).
-
-3. Result: a single-file Python executor containing the encrypted package and the embedded `PrivateKeyUrl`.
-
----
-
-## Detailed usage — generated executor (`payload_exec.py`)
-
-1. Ensure dependencies installed on the machine that will run the executor:
-
-```
 pip install requests pycryptodome
-```
-
-2. Run:
-
-```
 python payload_exec.py
 ```
 
 Behavior:
 
-* Fetches private PEM from embedded `PRIVATE_KEY_URL` (or prompts if missing).
+* Fetches the private PEM from embedded URL (or prompts if missing).
 * Verifies host: Windows OS, x64, >= 4 logical CPUs, >= 4 GB RAM.
-* If checks fail, attempts to securely delete itself and exits.
-* Decrypts payload (RSA-OAEP-SHA256 decrypt of AES key + AES-GCM decryption of payload).
-* Writes decrypted `.ps1` to secure temp file, executes with PowerShell via:
-
-  ```
-  pwsh|powershell -NoProfile -ExecutionPolicy Bypass -File <temp.ps1>
-  ```
-* Securely wipes and removes the temp `.ps1`.
+* If checks fail, attempts best-effort secure deletion of itself and exits.
+* Decrypts the embedded package and writes the decrypted PowerShell to a temp `.ps1`.
+* Executes PowerShell: `pwsh|powershell -NoProfile -ExecutionPolicy Bypass -File <temp.ps1>`.
+* Securely deletes temporary `.ps1`.
 
 ---
 
-## Design & crypto summary
+## How it works (brief)
 
-* Hybrid approach: RSA-OAEP-SHA256 encrypts AES-256 key. AES-GCM (nonce 12 bytes, tag 16 bytes) encrypts payload.
-* Encrypted package stored as compact JSON then base64-embedded in generated Python file.
-* Uses `pycryptodome` (`RSA.import_key`, `PKCS1_OAEP`, `AES.MODE_GCM`).
-* Private key is fetched at runtime via HTTPS raw URL. The private key must match the public PEM used during encryption.
+1. Generator fetches public PEM and reads local `.ps1` payload.
+2. Generates random AES-256 key and 12-byte nonce.
+3. Encrypts payload with AES-GCM.
+4. Encrypts AES key with RSA-OAEP-SHA256 using public key.
+5. Packages `RsaKeyEnc`, `Nonce`, `Tag`, `Cipher` into JSON, base64-encodes it and embeds into generated Python executor together with the provided private-key URL.
+6. Executor fetches private PEM at runtime, decrypts AES key with RSA private key, decrypts payload with AES-GCM, and executes.
 
 ---
 
 ## Security notes & operational guidance
 
-* **Protect private key**. The executor fetches the private PEM via URL. If that URL is public, rotate keys immediately.
-* Use HTTPS raw links only. Do not supply GitHub HTML pages; generator sanitizes some GitHub URL patterns to raw links.
-* Verify PEM format: `-----BEGIN PRIVATE KEY-----` (PKCS#8) and `-----BEGIN PUBLIC KEY-----` (X.509) work.
-* Running generated executor gives the runtime power to execute arbitrary PowerShell payloads. Use only in trusted, controlled environments.
-* The script attempts secure deletion by zeroing files before unlinking. This is best-effort and depends on filesystem semantics.
-* Audit network connectivity and ensure the private PEM URL is available only to intended hosts.
+* **Only use in authorized, controlled environments.** This tool executes arbitrary PowerShell on the host.
+* **Protect the private key URL.** The executor fetches the private PEM at runtime from the embedded URL. If that URL is public, the private key is exposed. Host the private key on a restricted server or use protected storage.
+* Use **HTTPS raw links** (e.g., `raw.githubusercontent.com`) not GitHub HTML pages. The generator sanitizes common GitHub URLs but prefer raw links.
+* Use appropriate key sizes (2048 minimum; 3072+ or 4096 recommended for high security).
+* AES-GCM tag verification ensures ciphertext integrity. RSA OAEP-SHA256 is used for key encapsulation.
+* Secure deletion is best-effort. Filesystems, backups, and swap may retain data. For sensitive payloads use additional host-level controls.
+* Review payloads and generated executors before deployment. Keep private keys rotated and access-controlled.
 
 ---
 
 ## Troubleshooting
 
-* **Missing deps**: `ModuleNotFoundError` → `pip install requests pycryptodome`.
-* **PEM import fails**: Ensure raw PEM content (not HTML) and correct headers/footers. Use raw.githubusercontent.com links or convert keys with OpenSSL.
-* **Decryption failed**: Usually public/private key mismatch or corrupted payload.
-* **PowerShell not found**: Ensure `pwsh` or `powershell.exe` in `PATH`.
-* **System check failed**: Verify OS is Windows and system meets architecture/CPU/RAM requirements.
-* **Generated file error about braces**: Use generator as-is; do not alter generated file template placeholders.
+* `ModuleNotFoundError` → run `pip install requests pycryptodome`.
+* `Failed to fetch public PEM` → ensure URL is raw PEM and reachable. Test with `curl` or your browser.
+* `Decryption failed` → likely key mismatch or corrupted package. Ensure the public key used to encrypt matches the private key URL used to decrypt.
+* `PowerShell not found` → ensure `powershell.exe` or `pwsh` is in `PATH`.
+* `System check failed` → executor requires Windows x64 with >=4 CPUs and >=4GB RAM.
+* `Generated file contains braces errors` → do not manually edit the generated template placeholders.
 
 ---
 
-## Tests
+## Testing checklist
 
-* Unit tests not included. Manual tests:
+1. Create simple `test.ps1`:
 
-  1. Create a small `echo.ps1` with `Write-Output "hello"`. Encrypt and generate executor. Run executor on a Windows machine. Confirm output `hello`.
-  2. Modify private PEM URL to be invalid. Executor should fail to fetch and print an error.
-  3. Run executor on a non-Windows or low-resource VM to confirm system-check failure and file purge behavior.
+```powershell
+Write-Output "hello from ps1"
+```
+
+2. Generate `payload_exec.py` with public/private PEM and `test.ps1`.
+3. Run `python payload_exec.py` on a Windows x64 machine that meets checks. Confirm output.
+4. Change private URL to invalid value. Executor should error fetching private key.
+5. Run on non-Windows machine. Executor should fail system check and attempt cleanup.
 
 ---
 
 ## License
 
-Choose and add a license file as appropriate (MIT/Apache/BSD). This repository contains cryptographic code and tooling; follow your organization’s security and export policies.
+Choose a license appropriate for your project. Example: MIT.
 
 ---
 
-End.
+## Sample commands
+
+```bash
+pip install requests pycryptodome
+python Powershell_code_encrtpyer_and_executer.py
+python payload_exec.py
+```
+
+---
+
+## Contact / notes
+
+Use responsibly. This repository contains code that executes remote-controlled payloads. Validate legal and policy constraints before use.
