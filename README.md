@@ -160,13 +160,6 @@ Write-Output "hello from ps1"
 4. Change private URL to invalid value. Executor should error fetching private key.
 5. Run on non-Windows machine. Executor should fail system check and attempt cleanup.
 
----
-
-## License
-
-Choose a license appropriate for your project. Example: MIT.
-
----
 
 ## Sample commands
 
